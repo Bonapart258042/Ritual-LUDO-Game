@@ -1,0 +1,73 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Ritual Testnet parameters from the uploaded specification
+export const RITUAL_CHAIN_ID = 1979; // Decimal
+export const RITUAL_CHAIN_HEX = "0x7BB"; // Hex for 1979
+export const RITUAL_RPC_HTTP = "https://rpc.ritualfoundation.org";
+export const RITUAL_RPC_WS = "wss://rpc.ritualfoundation.org/ws";
+export const RITUAL_EXPLORER = "https://explorer.ritualfoundation.org";
+
+// System Contract Addresses reported in the Ritual specification
+export const RITUAL_CONTRACTS = {
+  RITUALWALLET: "0x532F0df0896F353d8C3DD8cc134e8129DA2a3948",
+  ASYNCJOBTRACKER: "0xC069FFCa0389F44eCA2C626e55491b0ab045AEF5",
+  TEESERVICEREGISTRY: "0x9644e8562cE0Fe12b4deeC4163c064A8862Bf47F",
+  SCHEDULER: "0x56e776AE2DD60664b69Bd5F865F1180ffB7D58B",
+  SECRETSACL: "0xf9BF1BC8A3e79B9EBed0fa2Db70D0513fece32FD",
+  ASYNCDELIVERY: "0x5A16214ff555848411544b005f7Ac063742f39F6"
+};
+
+export type WalletType = 'metamask' | 'okx' | 'simulated';
+
+export interface Web3WalletState {
+  status: 'disconnected' | 'connecting' | 'connected' | 'error';
+  address: string | null;
+  walletType: WalletType | null;
+  chainId: number | null;
+  balance: string; // Balance in RITUAL tokens
+  errorMessage: string | null;
+  txHash: string | null;
+  txStatus: 'none' | 'sending' | 'confirmed' | 'failed';
+}
+
+/**
+ * Encodes string data into EVM hex calldata for onchain registration
+ */
+export function encodeVictoryCalldata(winnerName: string, moves: number, durationSeconds: number): string {
+  // Simple custom signature for RegisterLudoVictory(string,uint32,uint32)
+  // Method selector: 0xcdd6df10 (fictional but correct format)
+  const selector = "0xcdd6df10";
+  
+  // Custom hex conversion helper
+  const stringToHex = (str: string) => {
+    let hex = "";
+    for (let i = 0; i < str.length; i++) {
+      hex += str.charCodeAt(i).toString(16).padStart(2, '0');
+    }
+    return hex;
+  };
+
+  const nameHex = stringToHex(winnerName).padEnd(64, '0');
+  const movesHex = moves.toString(16).padStart(64, '0');
+  const durationHex = durationSeconds.toString(16).padStart(64, '0');
+
+  return `0x${selector}${nameHex}${movesHex}${durationHex}`;
+}
+
+/**
+ * Checks for provider presence
+ */
+export function hasMetaMask(): boolean {
+  if (typeof window === 'undefined') return false;
+  const anyWindow = window as any;
+  return !!(anyWindow.ethereum && anyWindow.ethereum.isMetaMask);
+}
+
+export function hasOKXWallet(): boolean {
+  if (typeof window === 'undefined') return false;
+  const anyWindow = window as any;
+  return !!(anyWindow.okxwallet || (anyWindow.ethereum && anyWindow.ethereum.isOkxWallet));
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Royal Ludo",
+  "description": "A beautifully crafted, high-fidelity Ludo board game featuring classic pass-and-play, intelligent computer opponents, multiple aesthetic themes, and custom board sound effects.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
