@@ -241,25 +241,28 @@ export default function App() {
     const matchedPlayer = players.find(p => p.id === winnerColor);
     const winnerName = matchedPlayer?.name || winnerColor.toUpperCase();
 
+    // Reset error message state before proceeding
+    setWeb3Wallet(prev => ({ ...prev, errorMessage: null }));
+
+    // 1. Preflight Validation: Wallet Connection
     if (web3Wallet.status !== 'connected' || !web3Wallet.address) {
       setWeb3Wallet(prev => ({ ...prev, errorMessage: 'Connect MetaMask wallet first.' }));
       return;
     }
 
-    if (!forceSimulate && parseFloat(web3Wallet.balance) < 0.0035) {
-      setShouldShakeBroadcast(true);
-      audio?.playMove();
-      setWeb3Wallet(prev => ({
-        ...prev,
-        errorMessage: 'Insufficient balance: ~0.0035 RITUAL gas fee required to broadcast real transaction.'
-      }));
-      setTimeout(() => setShouldShakeBroadcast(false), 600);
+    // 2. Preflight Validation: Transaction arguments
+    if (!winnerName || typeof winnerName !== 'string') {
+      setWeb3Wallet(prev => ({ ...prev, errorMessage: 'Invalid winner: Name cannot be empty.' }));
       return;
     }
-
-    setOnchainTxStatus('sending');
-    audio?.playMove();
-    addAction(`📝 BLOCKCHAIN: Transmitting match deed to Ritual network via MetaMask...`, 'system');
+    if (totalMovesCount <= 0 || isNaN(totalMovesCount)) {
+      setWeb3Wallet(prev => ({ ...prev, errorMessage: 'Validation failed: Move count is zero or invalid.' }));
+      return;
+    }
+    if (matchDurationSeconds <= 0 || isNaN(matchDurationSeconds)) {
+      setWeb3Wallet(prev => ({ ...prev, errorMessage: 'Validation failed: Match duration is zero or invalid.' }));
+      return;
+    }
 
     const calldata = encodeVictoryCalldata(winnerName, totalMovesCount, Math.round(matchDurationSeconds));
     const anyWindow = window as any;
@@ -267,6 +270,9 @@ export default function App() {
 
     // Simulate if forced, or if no extension exists in current sandbox frame
     if (forceSimulate || !provider) {
+      setOnchainTxStatus('sending');
+      audio?.playMove();
+      addAction(`📝 BLOCKCHAIN: Transmitting match deed to Ritual network via MetaMask...`, 'system');
       setTimeout(() => {
         const randHash = '0x' + Array.from({ length: 64 })
           .map(() => Math.floor(Math.random() * 16).toString(16))
@@ -293,28 +299,166 @@ export default function App() {
     }
 
     try {
-      if (web3Wallet.chainId !== 1979) {
+      // 3. Preflight Validation: Confirm Network (Chain ID is Ritual Testnet 1979)
+      const currentChainIdHex = await provider.request({ method: 'eth_chainId' });
+      const currentChainId = parseInt(currentChainIdHex, 16);
+      if (currentChainId !== 1979) {
+        addAction('⚠️ WRONG NETWORK: Attempting to switch network to Ritual Testnet...', 'system');
         await switchRitualNetwork();
+        const postSwitchChainHex = await provider.request({ method: 'eth_chainId' });
+        if (parseInt(postSwitchChainHex, 16) !== 1979) {
+          throw new Error('Wrong network. Switch to Ritual testnet.');
+        }
       }
 
-      const txParams = {
+      // 4. Preflight Validation: Confirm Contract configured and exists
+      const contractAddress = RITUAL_CONTRACTS.RITUALWALLET;
+      if (!contractAddress || !/^0x[a-fA-F0-9]{40}$/.test(contractAddress)) {
+        throw new Error('Contract address not configured.');
+      }
+
+      // 5. Preflight Validation: Verify contract has code deployed on-chain
+      let codeExists = true;
+      try {
+        const code = await provider.request({
+          method: 'eth_getCode',
+          params: [contractAddress, 'latest']
+        });
+        if (!code || code === '0x' || code === '0x0') {
+          console.warn(`[RITUAL DEV] Contract not deployed at ${contractAddress}`);
+          codeExists = false;
+        }
+      } catch (codeErr) {
+        console.warn('[RITUAL DEV] Failed to check contract code with eth_getCode:', codeErr);
+      }
+
+      // 6. Preflight Validation: Read native RITUAL gas balance
+      let currentBalance = 0n;
+      let balanceStr = '0.0000';
+      try {
+        const balanceHex = await provider.request({
+          method: 'eth_getBalance',
+          params: [web3Wallet.address, 'latest']
+        });
+        currentBalance = BigInt(balanceHex);
+        balanceStr = (Number(currentBalance) / 1e18).toFixed(4);
+        
+        // Sync readable balance to hook state
+        setWeb3Wallet(prev => ({ ...prev, balance: balanceStr }));
+      } catch (balErr) {
+        console.warn('[RITUAL DEV] Failed to query latest on-chain balance:', balErr);
+      }
+
+      // Query gasPrice
+      let gasPrice = 25000000000n; // fallback 25 Gwei
+      try {
+        const gasPriceHex = await provider.request({ method: 'eth_gasPrice' });
+        gasPrice = BigInt(gasPriceHex);
+      } catch (gpErr) {
+        console.warn('[RITUAL DEV] Could not read gasPrice from RPC:', gpErr);
+      }
+
+      // Development logging
+      console.log('--- RITUAL PREFLIGHT DEBUG ---');
+      console.log('Connected Chain ID:', currentChainId);
+      console.log('Contract Address:', contractAddress);
+      console.log('Contract Code Exists:', codeExists);
+      console.log('Function Name: RegisterLudoVictory');
+      console.log('ARGS: Winner =', winnerName, ', Moves =', totalMovesCount, ', Duration =', Math.round(matchDurationSeconds));
+      console.log('User Account:', web3Wallet.address);
+      console.log('User Balance:', balanceStr, 'RITUAL');
+      console.log('Current Gas Price (Gwei):', Number(gasPrice) / 1e9);
+      console.log('------------------------------');
+
+      // 7. Explicit Gas Estimation via RPC
+      let gasLimitHex: string;
+      try {
+        const estimatedGasHex = await provider.request({
+          method: 'eth_estimateGas',
+          params: [{
+            from: web3Wallet.address,
+            to: contractAddress,
+            data: calldata,
+            value: '0x0',
+          }],
+        });
+        
+        const estimatedGas = BigInt(estimatedGasHex);
+        // Apply 20% safety factor: estimate * 120 / 100
+        const bufferedGas = (estimatedGas * 120n) / 100n;
+        gasLimitHex = '0x' + bufferedGas.toString(16);
+        console.log(`[RITUAL DEV] Gas estimation succeeded: ${estimatedGas} (Buffered limit: ${bufferedGas})`);
+      } catch (estErr: any) {
+        console.error('[RITUAL DEV] Gas estimation failed:', estErr);
+        const errMsg = estErr?.message || estErr?.data?.message || JSON.stringify(estErr);
+
+        // Fallback gasLimit only if safe (e.g. RPC fee estimation fail but call is valid)
+        // If it is a clear revert or the contract code is absent, we reject it to avoid broken MetaMask views.
+        if (errMsg.toLowerCase().includes('revert') || errMsg.toLowerCase().includes('execution reverted') || !codeExists) {
+          const detail = !codeExists 
+            ? `Contract not configured/deployed at ${contractAddress}. Please deploy or use Simulating mode.`
+            : `Gas estimation failed. The transaction may revert. Reason: ${errMsg}`;
+          throw new Error(detail);
+        } else {
+          // RPC fee data unavailable. Proceed with safe fallout gasLimit: 550,000 gas units
+          console.warn('[RITUAL DEV] Fee data or RPC failed. Supplying safe conservative gas limit.');
+          gasLimitHex = '0x' + (550000n).toString(16);
+          addAction(`⚠️ RPC fee data unavailable. Proceeding with safe fallback gasLimit (550,000 gas).`, 'system');
+        }
+      }
+
+      // Check balance vs estimated transaction fee
+      const gasLimitVal = BigInt(gasLimitHex);
+      const estGasCostVal = gasLimitVal * gasPrice;
+      const minRequiredBalance = estGasCostVal > 5000000000000000n ? estGasCostVal : 5000000000000000n; // Guard with minimum 0.005 RITUAL
+
+      if (currentBalance < minRequiredBalance) {
+        setShouldShakeBroadcast(true);
+        setTimeout(() => setShouldShakeBroadcast(false), 600);
+        throw new Error(`Wallet has insufficient RITUAL for gas. Required: ~${(Number(minRequiredBalance) / 1e18).toFixed(5)} RITUAL. Current: ${balanceStr} RITUAL.`);
+      }
+
+      // 8. Set transaction send state and initiate MetaMask prompt
+      setOnchainTxStatus('sending');
+      audio?.playMove();
+      addAction(`📝 TRANSACTION SUBMISSION: Processing block delivery for transaction...`, 'system');
+
+      const txParams: any = {
         from: web3Wallet.address,
-        to: RITUAL_CONTRACTS.RITUALWALLET,
+        to: contractAddress,
         data: calldata,
         value: '0x0',
+        gas: gasLimitHex, // Explicit gas parameter!
       };
+
+      // Query fee statistics if supported
+      try {
+        const feeHistory = await provider.request({
+          method: 'eth_feeHistory',
+          params: [1, 'latest', [25]]
+        });
+        if (feeHistory?.baseFeePerGas) {
+          const baseFee = BigInt(feeHistory.baseFeePerGas[feeHistory.baseFeePerGas.length - 1]);
+          const maxPriorityFee = 2500000000n; // 2.5 Gwei Priority fee
+          const maxFee = (baseFee * 130n / 100n) + maxPriorityFee;
+          txParams.maxFeePerGas = '0x' + maxFee.toString(16);
+          txParams.maxPriorityFeePerGas = '0x' + maxPriorityFee.toString(16);
+        }
+      } catch (feeHistoryErr) {
+        console.warn('[RITUAL DEV] Failed to fetch feeHistory, using default gas settings:', feeHistoryErr);
+      }
 
       const txHash = await provider.request({
         method: 'eth_sendTransaction',
         params: [txParams],
       });
 
+      console.log('[RITUAL DEV] Submitted. Tx Hash:', txHash);
       setOnchainTxHash(txHash);
       addAction(`📝 TRANSACTION SUBMITTED: Hash: ${txHash}. Waiting for block confirmation on Ritual...`, 'system');
 
       setTimeout(() => {
         setOnchainTxStatus('confirmed');
-        // Deduct simulated or actual gas
         setWeb3Wallet(prev => {
           const newBalance = (parseFloat(prev.balance) - 0.045).toFixed(4);
           if (prev.address) {
@@ -330,16 +474,18 @@ export default function App() {
           return { ...prev, balance: newBalance };
         });
         addAction(`🏆 RITUAL CONFIRMED: Match outcomes fully recorded on chain block. Hailed to the court!`, 'system');
-      }, 2000);
+      }, 3000);
 
     } catch (err: any) {
-      console.error(err);
+      console.error('[RITUAL DEV] Send transaction error:', err);
       setOnchainTxStatus('failed');
+      const friendlyStr = err?.message || err?.data?.message || JSON.stringify(err);
+      
       setWeb3Wallet(prev => ({
         ...prev,
-        errorMessage: err?.message || 'Transaction compilation failed or wallet declined request.'
+        errorMessage: friendlyStr
       }));
-      addAction(`❌ TRANSACTION DECLINED: Onchain log cancelled.`, 'system');
+      addAction(`❌ TRANSACTION FAILED: ${friendlyStr.substring(0, 100)}`, 'system');
     }
   };
 
@@ -1401,6 +1547,27 @@ export default function App() {
                       </div>
                       <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20 uppercase shrink-0 font-bold ml-2">Synced</span>
                     </div>
+
+                    {web3Wallet.errorMessage && (
+                      <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl space-y-1">
+                        <span className="text-[10px] text-rose-400 uppercase font-black tracking-wider flex items-center gap-1 font-mono">
+                          <AlertCircle className="w-3.5 h-3.5 text-rose-400 animate-pulse" /> Web3 Transaction Error
+                        </span>
+                        <p className="text-[11px] text-rose-300 font-semibold leading-relaxed select-text">
+                          {web3Wallet.errorMessage}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWeb3Wallet(prev => ({ ...prev, errorMessage: null }));
+                            audio?.playMove();
+                          }}
+                          className="text-[10px] text-amber-400 hover:text-amber-300 font-mono font-bold mt-1.5 uppercase cursor-pointer flex items-center gap-1"
+                        >
+                          Dismiss Warning [✕]
+                        </button>
+                      </div>
+                    )}
 
                     {onchainTxStatus === 'none' && (
                       <div className="space-y-3">
