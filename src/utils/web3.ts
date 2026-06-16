@@ -39,7 +39,7 @@ export interface Web3WalletState {
 export function encodeVictoryCalldata(winnerName: string, moves: number, durationSeconds: number): string {
   // Simple custom signature for RegisterLudoVictory(string,uint32,uint32)
   // Method selector: 0xcdd6df10 (fictional but correct format)
-  const selector = "0xcdd6df10";
+  const selector = "cdd6df10";
   
   // Custom hex conversion helper
   const stringToHex = (str: string) => {
