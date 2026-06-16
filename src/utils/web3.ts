@@ -12,15 +12,15 @@ export const RITUAL_EXPLORER = "https://explorer.ritualfoundation.org";
 
 // System Contract Addresses reported in the Ritual specification
 export const RITUAL_CONTRACTS = {
-  RITUALWALLET: "0x532F0df0896F353d8C3DD8cc134e8129DA2a3948",
-  ASYNCJOBTRACKER: "0xC069FFCa0389F44eCA2C626e55491b0ab045AEF5",
+  RITUALWALLET: "0x532F0dF0896F353d8C3DD8cc134e8129DA2a3948",
+  ASYNCJOBTRACKER: "0xC069FFCa0389f44eCA2C626e55491b0ab045AEF5",
   TEESERVICEREGISTRY: "0x9644e8562cE0Fe12b4deeC4163c064A8862Bf47F",
-  SCHEDULER: "0x56e776AE2DD60664b69Bd5F865F1180ffB7D58B",
-  SECRETSACL: "0xf9BF1BC8A3e79B9EBed0fa2Db70D0513fece32FD",
-  ASYNCDELIVERY: "0x5A16214ff555848411544b005f7Ac063742f39F6"
+  SCHEDULER: "0x56e776BAE2DD60664b69Bd5F865F1180ffB7D58B",
+  SECRETSACL: "0xf9BF1BC8A3e79B9EBeD0fa2Db70D0513fecE32FD",
+  ASYNCDELIVERY: "0x5A16214fF555848411544b005f7Ac063742f39F6"
 };
 
-export type WalletType = 'metamask' | 'okx' | 'simulated';
+export type WalletType = 'metamask';
 
 export interface Web3WalletState {
   status: 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -70,4 +70,38 @@ export function hasOKXWallet(): boolean {
   if (typeof window === 'undefined') return false;
   const anyWindow = window as any;
   return !!(anyWindow.okxwallet || (anyWindow.ethereum && anyWindow.ethereum.isOkxWallet));
+}
+
+export interface RitualTransaction {
+  hash: string;
+  timestamp: number;
+  winner: string;
+  gasSpent: string;
+  walletAddress: string;
+  moves: number;
+  duration: number;
+}
+
+export function getRitualTransactions(address: string): RitualTransaction[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(`ritual_tx_history_${address.toLowerCase()}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.error("Failed to parse transactions", e);
+    return [];
+  }
+}
+
+export function saveRitualTransaction(address: string, tx: Omit<RitualTransaction, 'walletAddress'>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = `ritual_tx_history_${address.toLowerCase()}`;
+    const txs = getRitualTransactions(address);
+    const newTx: RitualTransaction = { ...tx, walletAddress: address.toLowerCase() };
+    const updated = [newTx, ...txs];
+    localStorage.setItem(key, JSON.stringify(updated));
+  } catch (e) {
+    console.error("Failed to save transaction", e);
+  }
 }
