@@ -423,30 +423,17 @@ export default function App() {
       audio?.playMove();
       addAction(`📝 TRANSACTION SUBMISSION: Processing block delivery for transaction...`, 'system');
 
+      // Use safe, non-zero legacy gas price to force Type 0 transaction (highly stable for custom EVM testnets)
+      const safeGasPrice = gasPrice > 0n ? gasPrice : 25000000000n; // fallback to 25 Gwei if 0
+
       const txParams: any = {
         from: web3Wallet.address,
         to: contractAddress,
         data: calldata,
         value: '0x0',
-        gas: gasLimitHex, // Explicit gas parameter!
+        gas: gasLimitHex, // Explicit gas limit
+        gasPrice: '0x' + safeGasPrice.toString(16), // Explicit legacy gas price
       };
-
-      // Query fee statistics if supported
-      try {
-        const feeHistory = await provider.request({
-          method: 'eth_feeHistory',
-          params: [1, 'latest', [25]]
-        });
-        if (feeHistory?.baseFeePerGas) {
-          const baseFee = BigInt(feeHistory.baseFeePerGas[feeHistory.baseFeePerGas.length - 1]);
-          const maxPriorityFee = 2500000000n; // 2.5 Gwei Priority fee
-          const maxFee = (baseFee * 130n / 100n) + maxPriorityFee;
-          txParams.maxFeePerGas = '0x' + maxFee.toString(16);
-          txParams.maxPriorityFeePerGas = '0x' + maxPriorityFee.toString(16);
-        }
-      } catch (feeHistoryErr) {
-        console.warn('[RITUAL DEV] Failed to fetch feeHistory, using default gas settings:', feeHistoryErr);
-      }
 
       const txHash = await provider.request({
         method: 'eth_sendTransaction',

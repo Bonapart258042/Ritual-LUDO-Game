@@ -38,7 +38,7 @@ export interface Web3WalletState {
  */
 export function encodeVictoryCalldata(winnerName: string, moves: number, durationSeconds: number): string {
   // Simple custom signature for RegisterLudoVictory(string,uint32,uint32)
-  // Method selector: 0xcdd6df10 (fictional but correct format)
+  // Method selector: 0xcdd6df10
   const selector = "cdd6df10";
   
   // Custom hex conversion helper
@@ -50,11 +50,25 @@ export function encodeVictoryCalldata(winnerName: string, moves: number, duratio
     return hex;
   };
 
-  const nameHex = stringToHex(winnerName).padEnd(64, '0');
+  // ABI Encoding: RegisterLudoVictory(string,uint32,uint32)
+  // Slot 0: Offset pointing to dynamic string content location of 256-bit slot index 3 (96 bytes = 0x60)
+  const offsetHex = (96).toString(16).padStart(64, '0');
+  
+  // Slot 1: Static Parameter (moves) padded to 256-bit hash boundary
   const movesHex = moves.toString(16).padStart(64, '0');
+  
+  // Slot 2: Static Parameter (durationSeconds) padded to 256-bit hash boundary
   const durationHex = durationSeconds.toString(16).padStart(64, '0');
+  
+  // Slot 3: Dynamic Parameter (string length) padded to 256-bit hash boundary
+  const stringBytesHex = stringToHex(winnerName);
+  const nameLenHex = (winnerName.length).toString(16).padStart(64, '0');
+  
+  // Slot 4 onwards: Dynamic Parameter (string content) padded to next 32-byte boundary
+  const padLength = Math.ceil(stringBytesHex.length / 64) * 64 || 64;
+  const nameContentHex = stringBytesHex.padEnd(padLength, '0');
 
-  return `0x${selector}${nameHex}${movesHex}${durationHex}`;
+  return `0x${selector}${offsetHex}${movesHex}${durationHex}${nameLenHex}${nameContentHex}`;
 }
 
 /**
