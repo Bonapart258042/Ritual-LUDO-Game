@@ -20,6 +20,27 @@ export const RITUAL_CONTRACTS = {
   ASYNCDELIVERY: "0x5A16214fF555848411544b005f7Ac063742f39F6"
 };
 
+/**
+ * Gets the configured Ludo Victory Registrar contract address.
+ */
+export function getLudoContract(): string {
+  if (typeof window === 'undefined') return '';
+  return localStorage.getItem('ritual_ludo_victory_contract') || '';
+}
+
+/**
+ * Saves the configured Ludo Victory Registrar contract address.
+ */
+export function saveLudoContract(address: string): void {
+  if (typeof window === 'undefined') return;
+  const cleanAddr = address.trim();
+  if (cleanAddr) {
+    localStorage.setItem('ritual_ludo_victory_contract', cleanAddr);
+  } else {
+    localStorage.removeItem('ritual_ludo_victory_contract');
+  }
+}
+
 export type WalletType = 'metamask';
 
 export interface Web3WalletState {

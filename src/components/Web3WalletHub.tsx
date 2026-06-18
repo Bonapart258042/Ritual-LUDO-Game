@@ -30,6 +30,8 @@ import {
   RitualTransaction
 } from '../utils/web3';
 import { audio } from '../utils/audio';
+import { LUDO_REGISTRAR_BYTECODE } from '../utils/contractData';
+import { useEffect } from 'react';
 
 interface Web3WalletHubProps {
   walletState: Web3WalletState;
@@ -37,6 +39,8 @@ interface Web3WalletHubProps {
   onDisconnect: () => void;
   onSwitchNetwork: () => Promise<void>;
   onFaucetClaim?: () => void;
+  ludoContractAddress: string;
+  onUpdateLudoContract: (address: string) => void;
 }
 
 export default function Web3WalletHub({ 
@@ -44,12 +48,130 @@ export default function Web3WalletHub({
   onConnect, 
   onDisconnect, 
   onSwitchNetwork,
-  onFaucetClaim
+  onFaucetClaim,
+  ludoContractAddress,
+  onUpdateLudoContract
 }: Web3WalletHubProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [copiedContract, setCopiedContract] = useState<string | null>(null);
   const [copiedAddress, setCopiedAddress] = useState(false);
   const [activeTab, setActiveTab] = useState<'contracts' | 'history'>('contracts');
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [deployError, setDeployError] = useState<string | null>(null);
+  const [hasBytecode, setHasBytecode] = useState<boolean | null>(null);
+  const [bytecodeLoading, setBytecodeLoading] = useState(false);
+  const [inputAddress, setInputAddress] = useState(ludoContractAddress);
+
+  useEffect(() => {
+    setInputAddress(ludoContractAddress);
+  }, [ludoContractAddress]);
+
+  useEffect(() => {
+    let active = true;
+    const verifyContractBytecode = async () => {
+      if (!ludoContractAddress || walletState.status !== 'connected') {
+        setHasBytecode(null);
+        return;
+      }
+      const anyWindow = window as any;
+      const provider = anyWindow?.ethereum;
+      if (!provider) {
+        setHasBytecode(false);
+        return;
+      }
+      setBytecodeLoading(true);
+      try {
+        const code = await provider.request({
+          method: 'eth_getCode',
+          params: [ludoContractAddress, 'latest']
+        });
+        if (active) {
+          const hasCode = code && code !== '0x' && code !== '0x0' && code !== '0x00';
+          setHasBytecode(hasCode);
+        }
+      } catch (e) {
+        console.error("Error verifying bytecode:", e);
+        if (active) setHasBytecode(false);
+      } finally {
+        if (active) setBytecodeLoading(false);
+      }
+    };
+
+    verifyContractBytecode();
+    return () => {
+      active = false;
+    };
+  }, [ludoContractAddress, walletState.status, walletState.chainId]);
+
+  const deployRegistrarContract = async () => {
+    const anyWindow = window as any;
+    const provider = anyWindow?.ethereum;
+    if (!provider) {
+      setDeployError("MetaMask is not available to sign contract deployment.");
+      return;
+    }
+    
+    setIsDeploying(true);
+    setDeployError(null);
+    try {
+      if (walletState.chainId !== RITUAL_CHAIN_ID) {
+        throw new Error("Must switch MetaMask to Ritual Testnet to deploy.");
+      }
+      
+      const txParams: any = {
+        from: walletState.address,
+        data: LUDO_REGISTRAR_BYTECODE,
+        gasPrice: '0x3B9ACA00', // Default 1.0 Gwei in hex
+      };
+      
+      // Attempt to query current gas price
+      try {
+        const gasPriceHex = await provider.request({ method: 'eth_gasPrice' });
+        if (gasPriceHex) {
+          txParams.gasPrice = gasPriceHex;
+        }
+      } catch (e) {
+        console.warn("Could not query gas price, using 1 gwei fallback", e);
+      }
+      
+      const txHash = await provider.request({
+        method: 'eth_sendTransaction',
+        params: [txParams],
+      });
+      
+      audio?.playMove();
+      
+      // Wait for mining to find Receipt (polling up to 15 times, 2s interval)
+      let deployedAddress: string | null = null;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        try {
+          const receipt = await provider.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash]
+          });
+          if (receipt && receipt.contractAddress) {
+            deployedAddress = receipt.contractAddress;
+            break;
+          }
+        } catch (e) {
+          console.warn("Error getting transaction receipt:", e);
+        }
+      }
+      
+      if (deployedAddress) {
+        onUpdateLudoContract(deployedAddress);
+        audio?.playYardExit();
+      } else {
+        throw new Error(`Deployment broadcast success (Tx Hash: ${txHash.substring(0, 10)}...) but contractAddress took too long to resolve. Please query receipt on-chain and paste below!`);
+      }
+    } catch (err: any) {
+      console.error("Failed to deploy registrar:", err);
+      setDeployError(err?.message || JSON.stringify(err));
+    } finally {
+      setIsDeploying(false);
+    }
+  };
 
   const transactions = walletState.address ? getRitualTransactions(walletState.address) : [];
 
@@ -276,9 +398,114 @@ export default function Web3WalletHub({
               </div>
 
               {activeTab === 'contracts' && (
-                /* Ritual Testnet System Contracts */
-                <div className="space-y-3 font-sans animate-fade-in">
-                  <div className="flex items-center gap-2 border-b border-indigo-500/10 pb-1.5">
+                <div className="space-y-4 font-sans animate-fade-in text-left">
+                  {/* Active Ludo Victory Registrar Dashboard */}
+                  <div className="p-4 bg-gradient-to-r from-amber-500/10 to-indigo-500/10 border border-amber-500/30 rounded-2xl space-y-3 shadow-inner">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-mono font-black text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                        👑 LUDO VICTORY REGISTRAR CONFIGURATION
+                      </span>
+                      <span className="text-[9px] font-mono non-italic uppercase tracking-widest bg-amber-500/15 border border-amber-500/35 text-amber-400 px-2 py-0.5 rounded-full font-bold">
+                        V1.0.0
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-slate-350 leading-relaxed font-sans">
+                      To run a real, verified on-chain victory recording, MetaMask must broadcast transactions to a deployed Ludo smart contract implementing the <code className="text-amber-400 font-mono text-[10px]">registerLudoVictory(...)</code> function. Direct EOA transfers or sending calldata to system proxies are not valid contract execution paths.
+                    </p>
+
+                    {/* Verification Badges */}
+                    <div className="text-[10.5px] font-mono leading-relaxed p-2.5 rounded-xl bg-black/40 border border-white/5 space-y-1.5">
+                      <div className="flex items-center justify-between text-slate-450 text-[9px] uppercase font-bold">
+                        <span>On-Chain Status Verification</span>
+                        {bytecodeLoading && <span className="animate-pulse text-indigo-400">Verifying...</span>}
+                      </div>
+
+                      {!ludoContractAddress ? (
+                        <div className="text-amber-300 flex items-start gap-1">
+                          <span className="shrink-0 text-amber-400 block">⚠️</span>
+                          <span><strong>Address Empty:</strong> Transactions will fallback to offline/mock simulators. Paste an address or deploy a fresh instance in 1-click below to activate.</span>
+                        </div>
+                      ) : ludoContractAddress.toLowerCase() === '0x532f0df0896f353d8c3dd8cc134e8129da2a3948' ? (
+                        <div className="text-rose-300 flex items-start gap-1">
+                          <span className="shrink-0 text-rose-400 block">❌</span>
+                          <span><strong>System/Proxy Address:</strong> The chosen address is a system proxy that does not support ludo victory logs. Transactions will revert. Please deploy a custom contract instance.</span>
+                        </div>
+                      ) : hasBytecode === true ? (
+                        <div className="text-emerald-300 flex items-start gap-1">
+                          <span className="shrink-0 text-emerald-400 block">✓</span>
+                          <span><strong>Active Smart Contract:</strong> Verified EVM contract detected on Ritual Testnet! MetaMask will execute direct calls successfully.</span>
+                        </div>
+                      ) : hasBytecode === false ? (
+                        <div className="text-amber-300 flex items-start gap-1">
+                          <span className="shrink-0 text-amber-400 block">⚠️</span>
+                          <span><strong>Code Verification Failed (EOA detected):</strong> eth_getCode returned empty code. This address is a standard EOA account, not a smart contract. Calldata calls will fail in MetaMask. Please deploy a registrar contract.</span>
+                        </div>
+                      ) : (
+                        <div className="text-indigo-300">
+                          Loading bytecode verification state...
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Contract Address Input Configuration */}
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-[10px] font-mono text-slate-400 uppercase font-black">Active Contract Address:</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={inputAddress}
+                          onChange={(e) => {
+                            setInputAddress(e.target.value);
+                            setHasBytecode(null);
+                          }}
+                          placeholder="0x... (EVM contract address)"
+                          className="w-full bg-black/40 border border-indigo-500/30 rounded-xl px-3 py-1.5 font-mono text-xs text-white focus:outline-none focus:border-indigo-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onUpdateLudoContract(inputAddress);
+                            audio?.playMove();
+                          }}
+                          className="px-4 py-1.5 bg-indigo-500 hover:bg-indigo-400 text-slate-950 font-mono font-black text-xs uppercase rounded-xl transition-all cursor-pointer flex items-center shrink-0"
+                        >
+                          Save Address
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Deployer action */}
+                    <div className="pt-2 border-t border-white/5 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-400 font-sans">Deploy instance to your current account in 1-click:</span>
+                        <span className="text-[10px] font-mono text-slate-500">Gas: ~100k</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={deployRegistrarContract}
+                        disabled={isDeploying}
+                        className={`w-full py-2.5 rounded-xl font-mono font-bold text-xs uppercase transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer ${
+                          isDeploying
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 font-extrabold animate-pulse'
+                            : 'bg-gradient-to-r from-amber-500 to-[#cc6600] hover:brightness-110 border border-amber-600/30 text-slate-950 font-extrabold'
+                        }`}
+                      >
+                        <RefreshCw className={`w-4 h-4 ${isDeploying ? 'animate-spin' : ''}`} />
+                        {isDeploying ? 'Deploying and verifying on-chain... Please wait' : '🚀 Deploy Ludo Victory Registrar Contract'}
+                      </button>
+
+                      {deployError && (
+                        <div className="p-2 bg-rose-500/10 border border-rose-500/20 rounded-xl text-[10.5px] font-sans text-rose-300 leading-relaxed max-h-[100px] overflow-y-auto select-text">
+                          ☠️ <strong>Deployment failed:</strong> {deployError}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Ritual Testnet System Contracts */}
+                  <div className="flex items-center gap-2 border-b border-indigo-500/10 pb-1.5 pt-2">
                     <Database className="w-4 h-4 text-[#ffe066]" />
                     <h4 className="font-display font-black text-xs uppercase tracking-wider text-slate-200">Ritual System Contracts (MetaMask Deployments)</h4>
                   </div>

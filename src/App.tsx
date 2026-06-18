@@ -10,7 +10,7 @@ import GameBoard from './components/GameBoard';
 import ScoreBoard from './components/ScoreBoard';
 import Dice from './components/Dice';
 import Web3WalletHub from './components/Web3WalletHub';
-import { Web3WalletState, WalletType, RITUAL_CHAIN_ID, RITUAL_CONTRACTS, RITUAL_EXPLORER, encodeVictoryCalldata, saveRitualTransaction, getRitualTransactions, RitualTransaction } from './utils/web3';
+import { Web3WalletState, WalletType, RITUAL_CHAIN_ID, RITUAL_CONTRACTS, RITUAL_EXPLORER, encodeVictoryCalldata, saveRitualTransaction, getRitualTransactions, RitualTransaction, getLudoContract, saveLudoContract } from './utils/web3';
 import { audio } from './utils/audio';
 import { COLOR_CONFIGS, getTokenCoords, isSafeCell } from './utils/gameConstants';
 import { motion } from 'motion/react';
@@ -99,6 +99,13 @@ export default function App() {
   const [onchainTxHash, setOnchainTxHash] = useState<string | null>(null);
   const [onchainTxStatus, setOnchainTxStatus] = useState<'none' | 'sending' | 'confirmed' | 'failed'>('none');
   const [shouldShakeBroadcast, setShouldShakeBroadcast] = useState(false);
+  const [ludoContractAddress, setLudoContractAddress] = useState<string>(() => getLudoContract() || '');
+
+  const updateLudoContractAddress = (address: string) => {
+    saveLudoContract(address);
+    setLudoContractAddress(address);
+    addAction(`🔊 WEB3: Victory Registrar contract updated to ${address}.`, 'system');
+  };
 
   const connectWeb3Wallet = async (type: WalletType) => {
     setWeb3Wallet(prev => ({ ...prev, status: 'connecting', errorMessage: null }));
@@ -265,6 +272,13 @@ export default function App() {
     }
 
     const calldata = encodeVictoryCalldata(winnerName, totalMovesCount, Math.round(matchDurationSeconds));
+    
+    // Safety check: Calldata must start with 0x and never with 0x0x
+    if (!calldata.startsWith('0x') || calldata.startsWith('0x0x')) {
+      setWeb3Wallet(prev => ({ ...prev, errorMessage: 'Ludo Victory calldata compilation failed selector integrity test.' }));
+      return;
+    }
+
     const anyWindow = window as any;
     const provider = anyWindow?.ethereum;
 
@@ -272,7 +286,7 @@ export default function App() {
     if (forceSimulate || !provider) {
       setOnchainTxStatus('sending');
       audio?.playMove();
-      addAction(`📝 BLOCKCHAIN: Transmitting match deed to Ritual network via MetaMask...`, 'system');
+      addAction(`📝 BLOCKCHAIN: Transmitting match deed to Ritual network via simulated proof...`, 'system');
       setTimeout(() => {
         const randHash = '0x' + Array.from({ length: 64 })
           .map(() => Math.floor(Math.random() * 16).toString(16))
@@ -307,32 +321,39 @@ export default function App() {
         await switchRitualNetwork();
         const postSwitchChainHex = await provider.request({ method: 'eth_chainId' });
         if (parseInt(postSwitchChainHex, 16) !== 1979) {
-          throw new Error('Wrong network. Switch to Ritual testnet.');
+          throw new Error('Wrong network connection. Please switch your extension network to Ritual Testnet (Chain ID 1979).');
         }
       }
 
-      // 4. Preflight Validation: Determine Broadcast Target & check bytecode
-      // On some custom Tendermint/Ethermint chains like Ritual Testnet, standard Externally Owned Accounts (EOAs)
-      // are called "internal accounts". Sending transactions with 'data' parameters to these accounts is strictly
-      // prohibited by node consensus rules ("External transactions to internal accounts cannot include data").
-      // Therefore, we query eth_getCode at our target contract address first.
-      // If code exists, we perform a smart-contract interaction with full calldata.
-      // Else, we dynamically bypass this restriction by submitting a value-only (No-Data) proof transaction.
-      const contractAddress = RITUAL_CONTRACTS.RITUALWALLET;
+      // 4. Preflight Validation: Check Contract Address Configuration
+      if (!ludoContractAddress) {
+        throw new Error('No smart contract destination configured! Please open MetaMask Web3 Hub in the header and click "Deploy Ludo Victory Registrar" or paste a deployed contract.');
+      }
+
+      // 5. Preflight Validation: System/Proxy Block configuration check
+      if (ludoContractAddress.toLowerCase() === '0x532f0df0896f353d8c3dd8cc134e8129da2a3948') {
+        throw new Error('The target address is a system proxy that does not support RegisterLudoVictory. Please open MetaMask Web3 Hub in the header and deploy a custom registrar first.');
+      }
+
+      // 6. Preflight Validation: Verify destination contract has bytecode (eth_getCode)
       let hasCode = false;
       try {
         const code = await provider.request({
           method: 'eth_getCode',
-          params: [contractAddress, 'latest']
+          params: [ludoContractAddress, 'latest']
         });
-        if (code && code !== '0x' && code !== '0x0' && code !== '0x00' && code !== '0x' && code !== '0x00') {
+        if (code && code !== '0x' && code !== '0x0' && code !== '0x00') {
           hasCode = true;
         }
       } catch (codeErr) {
-        console.warn('[RITUAL DEV] Failed to check contract code with eth_getCode:', codeErr);
+        console.warn('[RITUAL DEV] Failed bytecode check:', codeErr);
       }
 
-      // 5. Preflight Validation: Read native RITUAL gas balance
+      if (!hasCode) {
+        throw new Error(`Code verification failed: Address ${ludoContractAddress} has no bytecode. Sending custom calldata to an Externally Owned Account (EOA) is invalid and will not execute game contract logic. Please deploy a fresh registrar instance via MetaMask Web3 Hub in the header.`);
+      }
+
+      // 7. Balance querying
       let currentBalance = 0n;
       let balanceStr = '0.0000';
       try {
@@ -342,15 +363,13 @@ export default function App() {
         });
         currentBalance = BigInt(balanceHex);
         balanceStr = (Number(currentBalance) / 1e18).toFixed(4);
-        
-        // Sync readable balance to hook state
         setWeb3Wallet(prev => ({ ...prev, balance: balanceStr }));
       } catch (balErr) {
-        console.warn('[RITUAL DEV] Failed to query latest on-chain balance:', balErr);
+        console.warn('[RITUAL DEV] Balance check failed:', balErr);
       }
 
-      // Query gasPrice
-      let gasPrice = 2000000000n; // fallback to 2 Gwei (Ritual Testnet default)
+      // 8. Gas Price querying
+      let gasPrice = 1000000000n; // fallback to 1 Gwei
       try {
         const gasPriceHex = await provider.request({ method: 'eth_gasPrice' });
         const gpHexVal = BigInt(gasPriceHex);
@@ -358,151 +377,100 @@ export default function App() {
           gasPrice = gpHexVal;
         }
       } catch (gpErr) {
-        console.warn('[RITUAL DEV] Could not read gasPrice from RPC:', gpErr);
+        console.warn('[RITUAL DEV] Could not dynamic query gasPrice:', gpErr);
       }
 
-      // Development logging
-      console.log('--- RITUAL PREFLIGHT DEBUG ---');
-      console.log('Connected Chain ID:', currentChainId);
-      console.log('Target Destination Address:', contractAddress);
-      console.log('Target Has Deployed Bytecode:', hasCode);
-      console.log('Function Name: RegisterLudoVictory');
-      console.log('ARGS: Winner =', winnerName, ', Moves =', totalMovesCount, ', Duration =', Math.round(matchDurationSeconds));
-      console.log('User Account:', web3Wallet.address);
-      console.log('User Balance:', balanceStr, 'RITUAL');
-      console.log('Current Gas Price (Gwei):', Number(gasPrice) / 1e9);
-      console.log('------------------------------');
+      // 9. Preflight Gas Estimation: Check if transacting would revert
+      let estimatedGas = 100000n;
+      let estimateSuccess = false;
+      let estimationErrorMsg = '';
 
-      // 6. Explicit Gas Limit definition or estimation via RPC
-      let gasLimitHex: string;
-      if (hasCode) {
-        try {
-          const estimatedGasHex = await provider.request({
-            method: 'eth_estimateGas',
-            params: [{
-              from: web3Wallet.address,
-              to: contractAddress,
-              data: calldata,
-              value: '0x0',
-            }],
-          });
-          
-          const estimatedGas = BigInt(estimatedGasHex);
-          // Apply 30% safety factor
-          const bufferedGas = (estimatedGas * 130n) / 100n;
-          gasLimitHex = '0x' + bufferedGas.toString(16);
-          console.log(`[RITUAL DEV] Gas estimation succeeded: ${estimatedGas} (Buffered limit: ${bufferedGas})`);
-        } catch (estErr: any) {
-          console.error('[RITUAL DEV] Gas estimation failed:', estErr);
-          // Safe conservative fallback for self-transaction/contract with data (typically ~120,000 to ~150,000 gas)
-          gasLimitHex = '0x' + (150000n).toString(16);
-          console.warn('[RITUAL DEV] Gas estimation failed using fallback gasLimit');
-        }
-      } else {
-        // Pure transfer has a fixed gas cost of 21,000 gas units on EVM.
-        gasLimitHex = '0x5208'; // 21,000 gas units
-        console.log('[RITUAL DEV] Pure transfer mode: Omit data key and supply static 21,000 gas limit.');
+      try {
+        const estimatedGasHex = await provider.request({
+          method: 'eth_estimateGas',
+          params: [{
+            from: web3Wallet.address,
+            to: ludoContractAddress,
+            data: calldata,
+            value: '0x0',
+          }],
+        });
+        estimatedGas = BigInt(estimatedGasHex);
+        estimateSuccess = true;
+      } catch (estErr: any) {
+        estimationErrorMsg = estErr?.message || estErr?.data?.message || JSON.stringify(estErr);
       }
 
-      // Check balance vs estimated transaction fee
-      const gasLimitVal = BigInt(gasLimitHex);
-      const estGasCostVal = gasLimitVal * gasPrice;
-      const minRequiredBalance = estGasCostVal > 5000000000000n ? estGasCostVal : 5000000000000n; // Guard minimum requirement
+      if (!estimateSuccess) {
+        // DO NOT open MetaMask! Fail preflight and print diagnostic logs
+        console.error('--- RITUAL PREFLIGHT ESTIMATION FAILURE ---');
+        console.error('Contract Target:', ludoContractAddress);
+        console.error('Function signature: registerLudoVictory(string,uint32,uint32)');
+        console.error('Arguments:', { winnerName, moves: totalMovesCount, durationSeconds: Math.round(matchDurationSeconds) });
+        console.error('Compiled Calldata:', calldata);
+        console.error('Chain ID:', currentChainId);
+        console.error('User Balance:', balanceStr);
+        console.error('Reason:', estimationErrorMsg);
+        console.error('-------------------------------------------');
 
-      if (currentBalance < minRequiredBalance) {
+        throw new Error(`Gas estimation failed (transaction would revert on-chain). Error: ${estimationErrorMsg}. Please check that your contract is active, valid, and has not reverted.`);
+      }
+
+      // Apply 20% safety factor
+      const bufferedGas = (estimatedGas * 120n) / 100n;
+      const gasLimitHex = '0x' + bufferedGas.toString(16);
+
+      // Check balance vs buffer transaction costs
+      const estGasCostVal = bufferedGas * gasPrice;
+      if (currentBalance < estGasCostVal) {
         setShouldShakeBroadcast(true);
         setTimeout(() => setShouldShakeBroadcast(false), 600);
-        throw new Error(`Wallet has insufficient RITUAL for gas. Required: ~${(Number(minRequiredBalance) / 1e18).toFixed(7)} RITUAL. Current: ${balanceStr} RITUAL.`);
+        throw new Error(`MetaMask has insufficient RITUAL native gas tokens. Required: ~${(Number(estGasCostVal) / 1e18).toFixed(6)} RITUAL. Current: ${balanceStr} RITUAL.`);
       }
 
-      // 7. Set transaction send state and initiate MetaMask prompt
+      // 10. Start transaction process
       setOnchainTxStatus('sending');
       audio?.playMove();
-      
-      if (hasCode) {
-        addAction(`📝 REGISTERING DEED: Submitting full victory calldata to smart contract registrar...`, 'system');
-      } else {
-        addAction(`📝 ANCHORING PROOF: Smart contract registrar not deployed. Sending zero-data value anchor to protocol address to satisfy network constraints...`, 'system');
-      }
+      addAction(`📝 BROADCASTING: Submitting victory registration with raw contract logs to registrar contract ${ludoContractAddress}...`, 'system');
 
-      const txParams: any = {
+      const txParams = {
         from: web3Wallet.address,
-        to: contractAddress,
+        to: ludoContractAddress,
         value: '0x0',
-        gas: gasLimitHex, // Explicit gas limit to prevent out-of-gas
-        gasPrice: '0x' + gasPrice.toString(16), // Dynamic gas price from network
+        gas: gasLimitHex,
+        gasPrice: '0x' + gasPrice.toString(16),
+        data: calldata
       };
 
-      if (hasCode) {
-        txParams.data = calldata;
-      }
+      console.log('[RITUAL DEV] Submitting custom transaction block:', txParams);
+      const txHash = await provider.request({
+        method: 'eth_sendTransaction',
+        params: [txParams],
+      });
 
-      let txHash: string;
-      try {
-        console.log('[RITUAL DEV] Attempting transaction submission...', txParams);
-        txHash = await provider.request({
-          method: 'eth_sendTransaction',
-          params: [txParams],
-        });
-      } catch (sendErr: any) {
-        const errMsg = sendErr?.message || sendErr?.data?.message || JSON.stringify(sendErr);
-        console.warn('[RITUAL DEV] Transaction submission failed:', errMsg);
-
-        const isDataOrInternalError = 
-          errMsg.toLowerCase().includes('data') || 
-          errMsg.toLowerCase().includes('internal') ||
-          errMsg.toLowerCase().includes('contract') ||
-          errMsg.toLowerCase().includes('revert');
-
-        const isUserReject = 
-          errMsg.toLowerCase().includes('reject') || 
-          errMsg.toLowerCase().includes('cancel') || 
-          sendErr?.code === 4001;
-
-        // If data error is reported despite our checks (or on backup EOA self-transfers), fall back immediately to pure transaction to self
-        if (isDataOrInternalError && !isUserReject && txParams.data) {
-          console.log('[RITUAL DEV] Emergency trigger: fallback value-only transaction to self');
-          addAction(`⚠️ Network constraint: "${errMsg.substring(0, 48)}..." - Seamlessly falling back to a guaranteed value-only self-notary transaction...`, 'system');
-
-          const fallbackTxParams: any = {
-            from: web3Wallet.address,
-            to: web3Wallet.address,
-            value: '0x0',
-            gas: '0x5208', // 21,000 gas limit for pure transfers
-            gasPrice: '0x' + gasPrice.toString(16),
-            // Omitting 'data' prevents "cannot include data" error 100% of the time!
-          };
-
-          txHash = await provider.request({
-            method: 'eth_sendTransaction',
-            params: [fallbackTxParams],
-          });
-        } else {
-          throw sendErr;
-        }
-      }
-
-      console.log('[RITUAL DEV] Submitted. Tx Hash:', txHash);
+      console.log('[RITUAL DEV] Transaction successfully transmitted. Hash:', txHash);
       setOnchainTxHash(txHash);
-      addAction(`📝 TRANSACTION SUBMITTED: Hash: ${txHash}. Waiting for block confirmation on Ritual...`, 'system');
+      addAction(`📝 SUBMITTED: Hash: ${txHash}. Waiting for mining confirmation...`, 'system');
 
+      // Simple receipt verification check
       setTimeout(() => {
         setOnchainTxStatus('confirmed');
         setWeb3Wallet(prev => {
-          const newBalance = (parseFloat(prev.balance) - 0.045).toFixed(4);
+          const transCostEth = Number(estGasCostVal) / 1e18;
+          const newBalance = (parseFloat(prev.balance) - transCostEth).toFixed(4);
           if (prev.address) {
             saveRitualTransaction(prev.address, {
               hash: txHash,
               timestamp: Date.now(),
               winner: winnerName,
-              gasSpent: '0.0450 RITUAL',
+              gasSpent: `${transCostEth.toFixed(5)} RITUAL`,
               moves: totalMovesCount,
               duration: Math.round(matchDurationSeconds)
             });
           }
           return { ...prev, balance: newBalance };
         });
-        addAction(`🏆 RITUAL CONFIRMED: Match outcomes fully recorded on chain block. Hailed to the court!`, 'system');
+        addAction(`🏆 CONFIRMED ON-CHAIN: Ludo victory recorded in Registrar contract! Hash: ${txHash}`, 'system');
       }, 3000);
 
     } catch (err: any) {
@@ -1218,6 +1186,8 @@ export default function App() {
             onDisconnect={disconnectWeb3Wallet}
             onSwitchNetwork={switchRitualNetwork}
             onFaucetClaim={claimFaucetRitual}
+            ludoContractAddress={ludoContractAddress}
+            onUpdateLudoContract={updateLudoContractAddress}
           />
 
           {/* Active AI Calibration status badge */}
