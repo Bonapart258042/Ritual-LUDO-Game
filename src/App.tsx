@@ -11,6 +11,7 @@ import ScoreBoard from './components/ScoreBoard';
 import Dice from './components/Dice';
 import Web3WalletHub from './components/Web3WalletHub';
 import { Web3WalletState, WalletType, RITUAL_CHAIN_ID, RITUAL_CONTRACTS, RITUAL_EXPLORER, encodeVictoryCalldata, saveRitualTransaction, getRitualTransactions, RitualTransaction, getLudoContract, saveLudoContract } from './utils/web3';
+import { LUDO_REGISTRAR_BYTECODE } from './utils/contractData';
 import { audio } from './utils/audio';
 import { COLOR_CONFIGS, getTokenCoords, isSafeCell } from './utils/gameConstants';
 import { motion } from 'motion/react';
@@ -105,6 +106,81 @@ export default function App() {
     saveLudoContract(address);
     setLudoContractAddress(address);
     addAction(`🔊 WEB3: Victory Registrar contract updated to ${address}.`, 'system');
+  };
+
+  const [isDeployingContract, setIsDeployingContract] = useState(false);
+  const [deployContractError, setDeployContractError] = useState<string | null>(null);
+
+  const deployContractInGame = async () => {
+    const anyWindow = window as any;
+    const provider = anyWindow?.ethereum;
+    if (!provider) {
+      setDeployContractError("MetaMask is not available to sign contract deployment.");
+      return;
+    }
+    
+    setIsDeployingContract(true);
+    setDeployContractError(null);
+    try {
+      const currentChainIdHex = await provider.request({ method: 'eth_chainId' });
+      const currentChainId = parseInt(currentChainIdHex, 16);
+      if (currentChainId !== RITUAL_CHAIN_ID) {
+        throw new Error("Wrong network connection. Please switch your extension network to Ritual Testnet (Chain ID 1979).");
+      }
+      
+      const txParams: any = {
+        from: web3Wallet.address,
+        data: LUDO_REGISTRAR_BYTECODE,
+        gasPrice: '0x3B9ACA00', // Default 1.0 Gwei in hex
+      };
+      
+      try {
+        const gasPriceHex = await provider.request({ method: 'eth_gasPrice' });
+        if (gasPriceHex) {
+          txParams.gasPrice = gasPriceHex;
+        }
+      } catch (e) {
+        console.warn("Could not query gas price, using fallback", e);
+      }
+      
+      const txHash = await provider.request({
+        method: 'eth_sendTransaction',
+        params: [txParams],
+      });
+      
+      audio?.playMove();
+      addAction(`🚀 BROADCASTED DEPLOYMENT: Tx ${txHash.slice(0, 10)}... mining contract on Ritual...`, 'system');
+      
+      let deployedAddress: string | null = null;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        try {
+          const receipt = await provider.request({
+            method: 'eth_getTransactionReceipt',
+            params: [txHash]
+          });
+          if (receipt && receipt.contractAddress) {
+            deployedAddress = receipt.contractAddress;
+            break;
+          }
+        } catch (e) {
+          console.warn("Error getting transaction receipt:", e);
+        }
+      }
+      
+      if (deployedAddress) {
+        updateLudoContractAddress(deployedAddress);
+        audio?.playYardExit();
+        addAction(`🏆 CONTRACT MINED SUCCESSFULLY: Deployed Registrar Contract is active at ${deployedAddress}!`, 'system');
+      } else {
+        throw new Error(`Deployment success (Tx Hash: ${txHash.substring(0, 10)}...) but contractAddress took too long to resolve. Please copy contract address manual!`);
+      }
+    } catch (err: any) {
+      console.error("Failed to deploy registrar:", err);
+      setDeployContractError(err?.message || JSON.stringify(err));
+    } finally {
+      setIsDeployingContract(false);
+    }
   };
 
   const connectWeb3Wallet = async (type: WalletType) => {
@@ -327,12 +403,22 @@ export default function App() {
 
       // 4. Preflight Validation: Check Contract Address Configuration
       if (!ludoContractAddress) {
-        throw new Error('No smart contract destination configured! Please open MetaMask Web3 Hub in the header and click "Deploy Ludo Victory Registrar" or paste a deployed contract.');
+        setWeb3Wallet(prev => ({ 
+          ...prev, 
+          errorMessage: 'No active Ludo Victory Registrar contract set. Please click "Deploy New Registrar Contract" below to deploy a custom instance in 1-click!' 
+        }));
+        setOnchainTxStatus('none');
+        return;
       }
 
       // 5. Preflight Validation: System/Proxy Block configuration check
       if (ludoContractAddress.toLowerCase() === '0x532f0df0896f353d8c3dd8cc134e8129da2a3948') {
-        throw new Error('The target address is a system proxy that does not support RegisterLudoVictory. Please open MetaMask Web3 Hub in the header and deploy a custom registrar first.');
+        setWeb3Wallet(prev => ({ 
+          ...prev, 
+          errorMessage: 'The configured address is a system proxy that does not support RegisterLudoVictory. Please deploy a custom registrar first.' 
+        }));
+        setOnchainTxStatus('none');
+        return;
       }
 
       // 6. Preflight Validation: Verify destination contract has bytecode (eth_getCode)
@@ -350,7 +436,12 @@ export default function App() {
       }
 
       if (!hasCode) {
-        throw new Error(`Code verification failed: Address ${ludoContractAddress} has no bytecode. Sending custom calldata to an Externally Owned Account (EOA) is invalid and will not execute game contract logic. Please deploy a fresh registrar instance via MetaMask Web3 Hub in the header.`);
+        setWeb3Wallet(prev => ({ 
+          ...prev, 
+          errorMessage: `Address (${ludoContractAddress.substring(0, 10)}...) has no bytecode. On Cosmos EVMs, you cannot send custom game data to non-contract (EOA) accounts. Please use the button below to deploy an active instance!` 
+        }));
+        setOnchainTxStatus('none');
+        return;
       }
 
       // 7. Balance querying
@@ -401,23 +492,17 @@ export default function App() {
         estimationErrorMsg = estErr?.message || estErr?.data?.message || JSON.stringify(estErr);
       }
 
-      if (!estimateSuccess) {
-        // DO NOT open MetaMask! Fail preflight and print diagnostic logs
-        console.error('--- RITUAL PREFLIGHT ESTIMATION FAILURE ---');
-        console.error('Contract Target:', ludoContractAddress);
-        console.error('Function signature: registerLudoVictory(string,uint32,uint32)');
-        console.error('Arguments:', { winnerName, moves: totalMovesCount, durationSeconds: Math.round(matchDurationSeconds) });
-        console.error('Compiled Calldata:', calldata);
-        console.error('Chain ID:', currentChainId);
-        console.error('User Balance:', balanceStr);
-        console.error('Reason:', estimationErrorMsg);
-        console.error('-------------------------------------------');
-
-        throw new Error(`Gas estimation failed (transaction would revert on-chain). Error: ${estimationErrorMsg}. Please check that your contract is active, valid, and has not reverted.`);
+      let bufferedGas = 135000n;
+      if (estimateSuccess) {
+        // Apply 20% safety factor
+        bufferedGas = (estimatedGas * 120n) / 100n;
+        console.log(`[RITUAL DEV] Gas estimation succeeded: ${estimatedGas} (buffered is ${bufferedGas})`);
+      } else {
+        console.warn(`[RITUAL DEV] Gas estimation failed: ${estimationErrorMsg}. Proceeding with fallback static limit (135,015 units) to bypass block pre-check.`);
+        addAction(`⚠️ Gas Warning: estimation defaulted to 135,015 limit. MetaMask will open.`, 'system');
+        bufferedGas = 135015n;
       }
 
-      // Apply 20% safety factor
-      const bufferedGas = (estimatedGas * 120n) / 100n;
       const gasLimitHex = '0x' + bufferedGas.toString(16);
 
       // Check balance vs buffer transaction costs
@@ -1545,6 +1630,55 @@ export default function App() {
                         </code>
                       </div>
                       <span className="text-[9px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/20 uppercase shrink-0 font-bold ml-2">Synced</span>
+                    </div>
+
+                    {/* Active Contract Configuration inside Victory dialog */}
+                    <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 rounded-xl space-y-2 text-[11px]">
+                      <div className="flex items-center justify-between text-[9px] font-mono font-bold text-indigo-300 uppercase">
+                        <span>🎯 Registrar Contract Destination:</span>
+                        {ludoContractAddress ? (
+                          <span className="text-emerald-400">Configured ✓</span>
+                        ) : (
+                          <span className="text-amber-400">Not Deployed ⚠️</span>
+                        )}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={ludoContractAddress}
+                          onChange={(e) => updateLudoContractAddress(e.target.value)}
+                          placeholder="0x... (paste EVM contract address)"
+                          className="w-full bg-slate-950/60 border border-indigo-500/25 rounded-lg px-2.5 py-1.5 font-mono text-xs text-white focus:outline-none focus:border-indigo-400"
+                        />
+                      </div>
+
+                      <div className="pt-2 border-t border-white/5 space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] text-slate-450 leading-none">
+                          <span>Don't have a contract deployed on Ritual?</span>
+                          <span className="text-[9px] font-mono">Gas: ~100k</span>
+                        </div>
+                        
+                        <button
+                          type="button"
+                          onClick={deployContractInGame}
+                          disabled={isDeployingContract}
+                          className={`w-full py-2 rounded-lg font-mono font-bold text-[10.5px] uppercase transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer ${
+                            isDeployingContract
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse'
+                              : 'bg-gradient-to-r from-amber-500 to-[#cc6600] text-slate-950 hover:brightness-110 border border-amber-600/30'
+                          }`}
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isDeployingContract ? 'animate-spin' : ''}`} />
+                          {isDeployingContract ? 'Deploying on-chain...' : '🚀 Deploy Registrar Contract (1-Click)'}
+                        </button>
+
+                        {deployContractError && (
+                          <div className="p-2 bg-rose-500/10 border border-rose-500/20 rounded-lg text-[9.5px] text-rose-300 max-h-[70px] overflow-y-auto leading-relaxed">
+                            ❌ <strong>Deployment failed:</strong> {deployContractError}
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {web3Wallet.errorMessage && (
