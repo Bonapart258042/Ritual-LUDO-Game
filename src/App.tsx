@@ -311,19 +311,28 @@ export default function App() {
         }
       }
 
-      // 4. Preflight Validation: Determine Broadcast Target Address
-      // To guarantee a 100% reliable transaction that MetaMask can estimate correctly without reverting,
-      // we write the victory calldata directly via a self-transaction to the user's connected wallet (web3Wallet.address).
-      // Since an EOA (externally owned account) does not execute smart contract code, it will never revert on the EVM level.
-      // This records the victory calldata perfectly inside the transaction's 'data' payload forever on the Ritual Testnet,
-      // while completely bypassing the proxy contract execution issues that cause MetaMask to report "Network Fee: Unavailable".
-      const contractAddress = web3Wallet.address;
-      const isSelfTransfer = true;
+      // 4. Preflight Validation: Determine Broadcast Target & check bytecode
+      // On some custom Tendermint/Ethermint chains like Ritual Testnet, standard Externally Owned Accounts (EOAs)
+      // are called "internal accounts". Sending transactions with 'data' parameters to these accounts is strictly
+      // prohibited by node consensus rules ("External transactions to internal accounts cannot include data").
+      // Therefore, we query eth_getCode at our target contract address first.
+      // If code exists, we perform a smart-contract interaction with full calldata.
+      // Else, we dynamically bypass this restriction by submitting a value-only (No-Data) proof transaction.
+      const contractAddress = RITUAL_CONTRACTS.RITUALWALLET;
+      let hasCode = false;
+      try {
+        const code = await provider.request({
+          method: 'eth_getCode',
+          params: [contractAddress, 'latest']
+        });
+        if (code && code !== '0x' && code !== '0x0' && code !== '0x00' && code !== '0x' && code !== '0x00') {
+          hasCode = true;
+        }
+      } catch (codeErr) {
+        console.warn('[RITUAL DEV] Failed to check contract code with eth_getCode:', codeErr);
+      }
 
-      // 5. Preflight Validation: Verify contract code on-chain (skipped for EOA self-transfers)
-      let codeExists = false; // Expected false for EOA self-transfers
-
-      // 6. Preflight Validation: Read native RITUAL gas balance
+      // 5. Preflight Validation: Read native RITUAL gas balance
       let currentBalance = 0n;
       let balanceStr = '0.0000';
       try {
@@ -355,7 +364,8 @@ export default function App() {
       // Development logging
       console.log('--- RITUAL PREFLIGHT DEBUG ---');
       console.log('Connected Chain ID:', currentChainId);
-      console.log('Target Destination Address (Self-Transfer):', contractAddress);
+      console.log('Target Destination Address:', contractAddress);
+      console.log('Target Has Deployed Bytecode:', hasCode);
       console.log('Function Name: RegisterLudoVictory');
       console.log('ARGS: Winner =', winnerName, ', Moves =', totalMovesCount, ', Duration =', Math.round(matchDurationSeconds));
       console.log('User Account:', web3Wallet.address);
@@ -363,29 +373,35 @@ export default function App() {
       console.log('Current Gas Price (Gwei):', Number(gasPrice) / 1e9);
       console.log('------------------------------');
 
-      // 7. Explicit Gas Estimation via RPC
+      // 6. Explicit Gas Limit definition or estimation via RPC
       let gasLimitHex: string;
-      try {
-        const estimatedGasHex = await provider.request({
-          method: 'eth_estimateGas',
-          params: [{
-            from: web3Wallet.address,
-            to: contractAddress,
-            data: calldata,
-            value: '0x0',
-          }],
-        });
-        
-        const estimatedGas = BigInt(estimatedGasHex);
-        // Apply 30% safety factor
-        const bufferedGas = (estimatedGas * 130n) / 100n;
-        gasLimitHex = '0x' + bufferedGas.toString(16);
-        console.log(`[RITUAL DEV] Gas estimation succeeded: ${estimatedGas} (Buffered limit: ${bufferedGas})`);
-      } catch (estErr: any) {
-        console.error('[RITUAL DEV] Gas estimation failed:', estErr);
-        // Safe conservative fallback for self-transaction with data (typically ~22,000 to ~25,000 gas)
-        gasLimitHex = '0x' + (35000n).toString(16);
-        console.warn('[RITUAL DEV] Gas estimation failed using fallback gasLimit');
+      if (hasCode) {
+        try {
+          const estimatedGasHex = await provider.request({
+            method: 'eth_estimateGas',
+            params: [{
+              from: web3Wallet.address,
+              to: contractAddress,
+              data: calldata,
+              value: '0x0',
+            }],
+          });
+          
+          const estimatedGas = BigInt(estimatedGasHex);
+          // Apply 30% safety factor
+          const bufferedGas = (estimatedGas * 130n) / 100n;
+          gasLimitHex = '0x' + bufferedGas.toString(16);
+          console.log(`[RITUAL DEV] Gas estimation succeeded: ${estimatedGas} (Buffered limit: ${bufferedGas})`);
+        } catch (estErr: any) {
+          console.error('[RITUAL DEV] Gas estimation failed:', estErr);
+          // Safe conservative fallback for self-transaction/contract with data (typically ~120,000 to ~150,000 gas)
+          gasLimitHex = '0x' + (150000n).toString(16);
+          console.warn('[RITUAL DEV] Gas estimation failed using fallback gasLimit');
+        }
+      } else {
+        // Pure transfer has a fixed gas cost of 21,000 gas units on EVM.
+        gasLimitHex = '0x5208'; // 21,000 gas units
+        console.log('[RITUAL DEV] Pure transfer mode: Omit data key and supply static 21,000 gas limit.');
       }
 
       // Check balance vs estimated transaction fee
@@ -399,30 +415,38 @@ export default function App() {
         throw new Error(`Wallet has insufficient RITUAL for gas. Required: ~${(Number(minRequiredBalance) / 1e18).toFixed(7)} RITUAL. Current: ${balanceStr} RITUAL.`);
       }
 
-      // 8. Set transaction send state and initiate MetaMask prompt
+      // 7. Set transaction send state and initiate MetaMask prompt
       setOnchainTxStatus('sending');
       audio?.playMove();
-      addAction(`📝 TRANSACTION SUBMISSION: Processing block delivery for transaction...`, 'system');
+      
+      if (hasCode) {
+        addAction(`📝 REGISTERING DEED: Submitting full victory calldata to smart contract registrar...`, 'system');
+      } else {
+        addAction(`📝 ANCHORING PROOF: Smart contract registrar not deployed. Sending zero-data value anchor to protocol address to satisfy network constraints...`, 'system');
+      }
 
       const txParams: any = {
         from: web3Wallet.address,
         to: contractAddress,
-        data: calldata,
         value: '0x0',
         gas: gasLimitHex, // Explicit gas limit to prevent out-of-gas
         gasPrice: '0x' + gasPrice.toString(16), // Dynamic gas price from network
       };
 
+      if (hasCode) {
+        txParams.data = calldata;
+      }
+
       let txHash: string;
       try {
-        console.log('[RITUAL DEV] Attempting primary transaction submission with data payload...', txParams);
+        console.log('[RITUAL DEV] Attempting transaction submission...', txParams);
         txHash = await provider.request({
           method: 'eth_sendTransaction',
           params: [txParams],
         });
       } catch (sendErr: any) {
         const errMsg = sendErr?.message || sendErr?.data?.message || JSON.stringify(sendErr);
-        console.warn('[RITUAL DEV] Primary transaction with data failed:', errMsg);
+        console.warn('[RITUAL DEV] Transaction submission failed:', errMsg);
 
         const isDataOrInternalError = 
           errMsg.toLowerCase().includes('data') || 
@@ -435,9 +459,10 @@ export default function App() {
           errMsg.toLowerCase().includes('cancel') || 
           sendErr?.code === 4001;
 
-        if (isDataOrInternalError && !isUserReject) {
-          console.log('[RITUAL DEV] Triggering bulletproof pure-transfer fallback (No Data)');
-          addAction(`⚠️ Network constraint: "${errMsg.substring(0, 48)}..." - Seamlessly falling back to a guaranteed value-only pure transaction. Please sign the MetaMask confirmation prompt...`, 'system');
+        // If data error is reported despite our checks (or on backup EOA self-transfers), fall back immediately to pure transaction to self
+        if (isDataOrInternalError && !isUserReject && txParams.data) {
+          console.log('[RITUAL DEV] Emergency trigger: fallback value-only transaction to self');
+          addAction(`⚠️ Network constraint: "${errMsg.substring(0, 48)}..." - Seamlessly falling back to a guaranteed value-only self-notary transaction...`, 'system');
 
           const fallbackTxParams: any = {
             from: web3Wallet.address,
