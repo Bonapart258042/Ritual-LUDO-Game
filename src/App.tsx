@@ -129,10 +129,16 @@ export default function App() {
         throw new Error("Wrong network connection. Please switch your extension network to Ritual Testnet (Chain ID 1979).");
       }
       
+      // ✅ Get fresh account from MetaMask (don't rely on stale state)
+      const freshAccounts = await provider.request({ method: 'eth_requestAccounts' });
+      const fromAddress = freshAccounts[0];
+      if (!fromAddress) throw new Error("No MetaMask account available. Please unlock wallet.");
+
       const txParams: any = {
-        from: web3Wallet.address,
+        from: fromAddress, // ✅ Use actual MetaMask account, not hardcoded
         data: LUDO_REGISTRAR_BYTECODE,
-        gasPrice: '0x3B9ACA00', // Default 1.0 Gwei in hex
+        gas: '0x30000', // ~196608 gas — safe limit for this contract deployment
+        gasPrice: '0x3B9ACA00', // Default 1.0 Gwei fallback
       };
       
       try {
@@ -190,12 +196,15 @@ export default function App() {
 
     const anyWindow = window as any;
     const provider = anyWindow.ethereum;
-    const defaultMetaMaskAddress = '0xd203f65a5fc8e17184fa9bdb3aa8fbad06c062fe';
 
     if (provider) {
       try {
         const accounts = await provider.request({ method: 'eth_requestAccounts' });
-        const address = defaultMetaMaskAddress; // Use user's requested address for deployment
+        const address = accounts[0]; // ✅ Use actual connected MetaMask account
+
+        if (!address) {
+          throw new Error("No accounts returned from MetaMask. Please unlock your wallet.");
+        }
 
         let chainId = 1979;
         try {
@@ -205,22 +214,22 @@ export default function App() {
           // ignore
         }
 
-        let balanceStr = '12.450';
+        let balanceStr = '0.0000';
         try {
           const rawBalance = await provider.request({
             method: 'eth_getBalance',
-            params: [accounts[0] || address, 'latest']
+            params: [address, 'latest']
           });
           const balanceInWei = BigInt(rawBalance);
           const fetchedBal = Number(balanceInWei) / 1e18;
-          balanceStr = fetchedBal > 0 ? fetchedBal.toFixed(4) : '12.450';
+          balanceStr = fetchedBal.toFixed(4);
         } catch {
           // ignore
         }
 
         setWeb3Wallet({
           status: 'connected',
-          address: defaultMetaMaskAddress,
+          address: address, // ✅ Real address from MetaMask
           walletType: 'metamask',
           chainId: chainId,
           balance: balanceStr,
@@ -229,27 +238,35 @@ export default function App() {
           txStatus: 'none'
         });
 
-        addAction(`🔊 WEB3: MetaMask connected and deployed with address: ${defaultMetaMaskAddress}`, 'system');
+        addAction(`🔊 WEB3: MetaMask connected with address: ${address}`, 'system');
+
+        // ✅ Listen for account changes
+        provider.on('accountsChanged', (newAccounts: string[]) => {
+          if (newAccounts.length === 0) {
+            setWeb3Wallet(prev => ({ ...prev, status: 'disconnected', address: null }));
+          } else {
+            setWeb3Wallet(prev => ({ ...prev, address: newAccounts[0] }));
+          }
+        });
+
         return;
       } catch (err: any) {
-        console.warn("Metamask injection failed or rejected, using direct bridge", err);
+        console.warn("MetaMask connection failed:", err);
+        setWeb3Wallet(prev => ({
+          ...prev,
+          status: 'error',
+          errorMessage: err?.message || 'MetaMask connection failed.'
+        }));
+        return;
       }
     }
 
-    // Direct MetaMask Bridge Fallback
-    setTimeout(() => {
-      setWeb3Wallet({
-        status: 'connected',
-        address: defaultMetaMaskAddress,
-        walletType: 'metamask',
-        chainId: 1979,
-        balance: '79.245',
-        errorMessage: null,
-        txHash: null,
-        txStatus: 'none'
-      });
-      addAction(`🔊 WEB3: MetaMask successfully deployed with custom address: ${defaultMetaMaskAddress}`, 'system');
-    }, 800);
+    // No MetaMask detected
+    setWeb3Wallet(prev => ({
+      ...prev,
+      status: 'error',
+      errorMessage: 'MetaMask not detected. Please install MetaMask extension.'
+    }));
   };
 
   const disconnectWeb3Wallet = () => {
@@ -318,7 +335,7 @@ export default function App() {
       ...prev,
       balance: (parseFloat(prev.balance) + 100).toFixed(4)
     }));
-    addAction('🔊 FAUCET: Credited +100.0 RITUAL to MetaMask address 0xd203f65a5fc8e17184fa9bdb3aa8fbad06c062fe.', 'system');
+    addAction(`🔊 FAUCET: Credited +100.0 RITUAL to MetaMask address ${web3Wallet.address || 'your wallet'}.`, 'system');
   };
 
   const recordVictoryOnchain = async (winnerColor: PlayerColor, forceSimulate = false) => {
