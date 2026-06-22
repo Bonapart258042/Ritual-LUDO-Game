@@ -58,9 +58,9 @@ export interface Web3WalletState {
  * Encodes string data into EVM hex calldata for onchain registration
  */
 export function encodeVictoryCalldata(winnerName: string, moves: number, durationSeconds: number): string {
-  // Simple custom signature for RegisterLudoVictory(string,uint32,uint32)
-  // Method selector: 0xcdd6df10
-  const selector = "cdd6df10";
+  // Simple custom signature for registerLudoVictory(string,uint32,uint32)
+  // Method selector of registerLudoVictory(string,uint32,uint32) is keccak256("registerLudoVictory(string,uint32,uint32)") = 0x4a63b8c3
+  const selector = "4a63b8c3";
   
   // Custom hex conversion helper
   const stringToHex = (str: string) => {
