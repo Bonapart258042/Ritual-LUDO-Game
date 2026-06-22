@@ -492,17 +492,33 @@ export default function App() {
         estimationErrorMsg = estErr?.message || estErr?.data?.message || JSON.stringify(estErr);
       }
 
-      let bufferedGas = 135000n;
-      if (estimateSuccess) {
-        // Apply 20% safety factor
-        bufferedGas = (estimatedGas * 120n) / 100n;
-        console.log(`[RITUAL DEV] Gas estimation succeeded: ${estimatedGas} (buffered is ${bufferedGas})`);
-      } else {
-        console.warn(`[RITUAL DEV] Gas estimation failed: ${estimationErrorMsg}. Proceeding with fallback static limit (135,015 units) to bypass block pre-check.`);
-        addAction(`⚠️ Gas Warning: estimation defaulted to 135,015 limit. MetaMask will open.`, 'system');
-        bufferedGas = 135015n;
+      // Preflight logs as requested:
+      // - target contract
+      // - chainId
+      // - function selector
+      // - calldata length
+      // - gas estimate result
+      const functSelector = calldata.substring(0, 10);
+      const calldataLen = calldata.length;
+
+      console.log('=== RITUAL PREFLIGHT DIAGNOSTIC REPORT ===');
+      console.log('Target Contract Address :', ludoContractAddress);
+      console.log('Chain ID                :', currentChainId);
+      console.log('Function Selector       :', functSelector);
+      console.log('Calldata Hex Length     :', calldataLen);
+      console.log('Gas Estimate Success    :', estimateSuccess);
+      console.log('Gas Estimate Result     :', estimateSuccess ? `${estimatedGas.toString()} units` : `Reverted/Failed: ${estimationErrorMsg}`);
+      console.log('==========================================');
+
+      // Inform/log diagnostic metrics to in-game system console feed
+      addAction(`🔍 PREFLIGHT: Target=${ludoContractAddress.substring(0, 10)}... | Selector=${functSelector} | Gas=${estimateSuccess ? estimatedGas.toString() : 'REVERTED'}`, 'system');
+
+      if (!estimateSuccess) {
+        throw new Error(`On-chain transaction execution simulation failed (estimateGas reverted). The transaction would fail on Ritual Testnet. Reason: ${estimationErrorMsg}. Please check if the game contract is correctly initialized.`);
       }
 
+      // Apply 20% safety factor over verified estimation
+      const bufferedGas = (estimatedGas * 120n) / 100n;
       const gasLimitHex = '0x' + bufferedGas.toString(16);
 
       // Check balance vs buffer transaction costs
