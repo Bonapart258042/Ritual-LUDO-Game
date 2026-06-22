@@ -136,6 +136,21 @@ export function saveRitualTransaction(address: string, tx: Omit<RitualTransactio
     const newTx: RitualTransaction = { ...tx, walletAddress: address.toLowerCase() };
     const updated = [newTx, ...txs];
     localStorage.setItem(key, JSON.stringify(updated));
+
+    // Also double-write to the global 'ritual_transactions' key as requested:
+    try {
+      const globalRaw = localStorage.getItem('ritual_transactions');
+      const globalTxs = globalRaw ? JSON.parse(globalRaw) : [];
+      if (Array.isArray(globalTxs)) {
+        if (!globalTxs.some((item: any) => item.hash === tx.hash)) {
+          localStorage.setItem('ritual_transactions', JSON.stringify([newTx, ...globalTxs]));
+        }
+      } else {
+        localStorage.setItem('ritual_transactions', JSON.stringify([newTx]));
+      }
+    } catch (innerErr) {
+      console.warn("Failed to update global 'ritual_transactions' key:", innerErr);
+    }
   } catch (e) {
     console.error("Failed to save transaction", e);
   }

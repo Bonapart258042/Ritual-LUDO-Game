@@ -15,10 +15,11 @@ import { LUDO_REGISTRAR_BYTECODE } from './utils/contractData';
 import { audio } from './utils/audio';
 import { COLOR_CONFIGS, getTokenCoords, isSafeCell } from './utils/gameConstants';
 import { motion } from 'motion/react';
-import { Crown, HelpCircle, Trophy, RefreshCw, Calendar, Volume2, VolumeX, ShieldClose, BookOpen, Settings, ScrollText, Swords, Clock, Hash, Network, Coins, ExternalLink, AlertCircle, Zap } from 'lucide-react';
+import { Crown, HelpCircle, Trophy, RefreshCw, Calendar, Volume2, VolumeX, ShieldClose, BookOpen, Settings, ScrollText, Swords, Clock, Hash, Network, Coins, ExternalLink, AlertCircle, Zap, History } from 'lucide-react';
 import Fireworks from './components/Fireworks';
 import SettingsModal, { AIDifficulty } from './components/SettingsModal';
 import MatchLogDrawer from './components/MatchLogDrawer';
+import VictoryRecordsModal from './components/VictoryRecordsModal';
 import { ResponsiveContainer, PieChart, Pie, Cell, Tooltip } from 'recharts';
 
 const initialTokens = (): Token[] => {
@@ -594,6 +595,7 @@ export default function App() {
   const [difficulty, setDifficulty] = useState<AIDifficulty>('medium');
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isMatchLogOpen, setIsMatchLogOpen] = useState<boolean>(false);
+  const [isVictoryRecordsOpen, setIsVictoryRecordsOpen] = useState<boolean>(false);
 
   // Match statistics tracking
   const [totalMovesCount, setTotalMovesCount] = useState<number>(0);
@@ -1260,6 +1262,13 @@ export default function App() {
         }}
       />
 
+      {/* Victory Records Ledger Modal */}
+      <VictoryRecordsModal
+        isOpen={isVictoryRecordsOpen}
+        onClose={() => setIsVictoryRecordsOpen(false)}
+        currentWalletAddress={web3Wallet.address}
+      />
+
       {/* Background Ambient Mesh Gradients */}
       <div className="absolute top-[-100px] left-[-100px] w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-[120px] pointer-events-none z-0"></div>
       <div className="absolute bottom-[-100px] right-[-100px] w-[600px] h-[600px] bg-rose-600/15 rounded-full blur-[120px] pointer-events-none z-0"></div>
@@ -1313,6 +1322,20 @@ export default function App() {
               <span className="text-[10px] font-mono tracking-wider font-extrabold uppercase hidden sm:inline">Chronicles</span>
             </button>
           )}
+
+          {/* Onchain Victory Ledger Records Button */}
+          <button
+            id="btn-trigger-victory-records"
+            onClick={() => {
+              audio?.playMove();
+              setIsVictoryRecordsOpen(true);
+            }}
+            className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 hover:border-indigo-400/40 hover:bg-indigo-500/20 text-indigo-400 hover:text-indigo-300 transition-all cursor-pointer flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.1)] gap-1.5 px-3"
+            title="Open On-Chain Victory Ledger Records"
+          >
+            <History className="w-4 h-4" />
+            <span className="text-[10px] font-mono tracking-wider font-extrabold uppercase hidden sm:inline">Ledger</span>
+          </button>
 
           {/* Persistent Sound Toggle button */}
           <button
