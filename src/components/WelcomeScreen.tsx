@@ -6,16 +6,55 @@
 import React, { useState, useEffect } from 'react';
 import { Player, PlayerColor } from '../types';
 import { motion } from 'motion/react';
-import { Crown, HelpCircle, Users, Play, ShieldAlert, Sparkles, X, Swords, Trophy, Share2, Copy, Check, Link2, Plus, Users2, Bot, Gamepad2, ScrollText } from 'lucide-react';
+import { 
+  Crown, HelpCircle, Users, Play, ShieldAlert, Sparkles, X, Swords, Trophy, 
+  Share2, Copy, Check, Link2, Plus, Users2, Bot, Gamepad2, ScrollText,
+  Network, Coins, AlertCircle, Database, RefreshCw, Search, ChevronLeft, 
+  ChevronRight, TrendingUp, Award, History, Trash2, ExternalLink, Cpu, 
+  Terminal, Compass, Wallet, Key
+} from 'lucide-react';
 import { PREDEFINED_EMOJIS, generateProceduralAvatar } from '../utils/avatar';
 import { audio } from '../utils/audio';
+import { 
+  Web3WalletState, 
+  WalletType, 
+  RITUAL_CHAIN_ID, 
+  RITUAL_EXPLORER,
+  getRitualTransactions,
+  RitualTransaction
+} from '../utils/web3';
 
 interface WelcomeScreenProps {
   onStartGame: (players: Player[], theme: 'royal' | 'cosmic') => void;
+  web3Wallet: Web3WalletState;
+  connectWeb3Wallet: (type: WalletType) => Promise<void>;
+  disconnectWeb3Wallet: () => void;
+  switchRitualNetwork: () => Promise<void>;
+  claimFaucetRitual: () => void;
+  ludoContractAddress: string;
+  updateLudoContractAddress: (address: string) => void;
+  deployContractInGame: () => Promise<void>;
+  isDeployingContract: boolean;
+  deployContractError: string | null;
+  onOpenVictoryRecords: () => void;
 }
 
-export default function WelcomeScreen({ onStartGame }: WelcomeScreenProps) {
+export default function WelcomeScreen({ 
+  onStartGame,
+  web3Wallet,
+  connectWeb3Wallet,
+  disconnectWeb3Wallet,
+  switchRitualNetwork,
+  claimFaucetRitual,
+  ludoContractAddress,
+  updateLudoContractAddress,
+  deployContractInGame,
+  isDeployingContract,
+  deployContractError,
+  onOpenVictoryRecords
+}: WelcomeScreenProps) {
   const [theme, setTheme] = useState<'royal' | 'cosmic'>('royal');
+  const [activeMainTab, setActiveMainTab] = useState<'ludo' | 'ritual'>('ludo');
   
   // Set default configurations for players (Red customized to Ashish PRO)
   const [playerConfigs, setPlayerConfigs] = useState<Record<PlayerColor, { name: string; isComputer: boolean; isActive: boolean; avatar: string }>>({
@@ -391,7 +430,42 @@ export default function WelcomeScreen({ onStartGame }: WelcomeScreenProps) {
           </p>
         </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
+      {/* Main Tab Selector (Ludo Arena vs Ritual Developer Web3 Terminal) */}
+      <div className="flex justify-center mb-8">
+        <div className="bg-slate-950/60 p-1.5 rounded-2xl border border-white/10 flex gap-2 backdrop-blur-md">
+          <button
+            onClick={() => {
+              setActiveMainTab('ludo');
+              audio?.playMove();
+            }}
+            className={`px-5 py-2.5 rounded-xl font-display font-black text-xs md:text-sm uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              activeMainTab === 'ludo'
+                ? 'bg-gradient-to-r from-amber-500 to-yellow-500 text-slate-950 font-bold shadow-md shadow-amber-500/10'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Gamepad2 className="w-4 h-4" />
+            Ludo Lounge
+          </button>
+          <button
+            onClick={() => {
+              setActiveMainTab('ritual');
+              audio?.playMove();
+            }}
+            className={`px-5 py-2.5 rounded-xl font-display font-black text-xs md:text-sm uppercase tracking-wider flex items-center gap-2 transition-all cursor-pointer ${
+              activeMainTab === 'ritual'
+                ? 'bg-gradient-to-r from-indigo-500 to-sky-500 text-white font-bold shadow-md shadow-indigo-500/20'
+                : 'text-slate-400 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Terminal className="w-4 h-4 animate-pulse" />
+            Ritual Web3 Terminal
+          </button>
+        </div>
+      </div>
+
+      {activeMainTab === 'ludo' && (
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
         {/* Play Setup Column (8 cols) */}
         <div id="play-setup-card" className="md:col-span-8 bg-white/5 backdrop-blur-xl border border-white/10 rounded-[32px] shadow-glass p-6 md:p-8 space-y-6">
           <div className="flex items-center justify-between border-b border-white/10 pb-4">
@@ -842,7 +916,305 @@ export default function WelcomeScreen({ onStartGame }: WelcomeScreenProps) {
             </p>
           </div>
         </div> {/* Closes md:col-span-4 */}
-      </div> {/* Closes grid */}
+      </div>
+      )}
+
+      {activeMainTab === 'ritual' && (
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start"
+        >
+          {/* Web3 Core Control Center (8 columns) */}
+          <div className="md:col-span-8 bg-white/5 backdrop-blur-xl border border-white/10 rounded-[32px] p-6 md:p-8 space-y-6">
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <h2 className="text-lg font-display font-bold text-slate-100 flex items-center gap-2">
+                <Terminal className="w-5 h-5 text-indigo-400 animate-pulse" /> Ritual Testnet Developer Portal
+              </h2>
+              <span className="text-[10px] font-mono uppercase tracking-widest bg-indigo-500/10 border border-indigo-500/20 px-3 py-1 rounded-full text-indigo-300 font-extrabold">
+                Active Environment
+              </span>
+            </div>
+
+            {/* Wallet Integration Segment */}
+            <div className="bg-slate-950/40 border border-white/5 rounded-2xl p-5 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-display font-bold text-slate-200 flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-amber-400" /> MetaMask Integration Status
+                </h3>
+                {web3Wallet.status === 'connected' ? (
+                  <span className="flex items-center gap-1.5 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-mono rounded-md font-bold uppercase">
+                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
+                    CONNECTED
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 px-2 py-0.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-[10px] font-mono rounded-md font-bold uppercase">
+                    <span className="w-1.5 h-1.5 bg-rose-500 rounded-full" />
+                    DISCONNECTED
+                  </span>
+                )}
+              </div>
+
+              {web3Wallet.status !== 'connected' ? (
+                <div className="space-y-4 py-2">
+                  <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                    Connect your MetaMask wallet browser extension to unlock advanced on-chain features like real-time contract deployment, custom transaction logs, and permanent victory verification.
+                  </p>
+                  <button
+                    onClick={() => {
+                      connectWeb3Wallet('metamask');
+                      audio?.playYardExit();
+                    }}
+                    className="w-full py-3 bg-gradient-to-r from-amber-500 via-amber-600 to-yellow-500 hover:brightness-110 active:scale-[0.99] text-slate-950 rounded-xl font-display font-extrabold tracking-wider text-xs uppercase cursor-pointer flex items-center justify-center gap-2 shadow-lg transition-all"
+                  >
+                    <img 
+                      src="https://raw.githubusercontent.com/MetaMask/brand-resources/master/SVG/metamask-fox.svg" 
+                      alt="MetaMask" 
+                      className="w-4 h-4" 
+                    />
+                    Connect MetaMask Extension
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {/* Connected Details Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="bg-black/45 border border-white/5 p-3 rounded-xl space-y-1">
+                      <span className="text-[9px] font-mono text-slate-450 block uppercase">YOUR METAMASK ADDRESS</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <code className="text-white text-xs font-mono select-all truncate">
+                          {web3Wallet.address}
+                        </code>
+                        <button
+                          onClick={() => {
+                            if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                              navigator.clipboard.writeText(web3Wallet.address || '');
+                              audio?.playMove();
+                            }
+                          }}
+                          className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/5 transition-all cursor-pointer"
+                          title="Copy Address"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="bg-black/45 border border-white/5 p-3 rounded-xl space-y-1">
+                      <span className="text-[9px] font-mono text-slate-450 block uppercase">CURRENT BALANCE</span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-mono text-amber-300 font-bold flex items-center gap-1.5">
+                          <Coins className="w-3.5 h-3.5 text-amber-400" />
+                          {web3Wallet.balance} RITUAL
+                        </span>
+                        <button
+                          onClick={() => {
+                            claimFaucetRitual();
+                            audio?.playYardExit();
+                          }}
+                          className="px-2 py-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-white text-[9.5px] font-mono rounded font-bold uppercase transition-all cursor-pointer"
+                        >
+                          Claim +100 Faucet
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Network Switch Warning */}
+                  {web3Wallet.chainId !== RITUAL_CHAIN_ID && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 p-3 rounded-xl flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5 animate-pulse" />
+                      <div className="space-y-1.5">
+                        <p className="text-xs text-amber-200 font-bold font-sans">
+                          Incorrect MetaMask Network Detected
+                        </p>
+                        <p className="text-[11px] text-slate-300 leading-normal">
+                          MetaMask is connected, but not to the Ritual Testnet. You must be on the Ritual Chain (ID: 1979) to deploy contracts or register victories.
+                        </p>
+                        <button
+                          onClick={() => {
+                            switchRitualNetwork();
+                            audio?.playMove();
+                          }}
+                          className="px-3 py-1.5 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 text-amber-300 font-mono text-[10px] font-bold uppercase rounded transition-all cursor-pointer"
+                        >
+                          Switch to Ritual Testnet (Chain ID 1979)
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => {
+                        disconnectWeb3Wallet();
+                        audio?.playYardExit();
+                      }}
+                      className="text-slate-450 hover:text-rose-400 text-[10px] font-mono uppercase tracking-wider transition-colors cursor-pointer"
+                    >
+                      Disconnect Wallet
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Smart Contract Segment */}
+            <div className="bg-slate-950/40 border border-white/5 rounded-2xl p-5 space-y-4">
+              <h3 className="text-sm font-display font-bold text-slate-200 flex items-center gap-2">
+                <Database className="w-4 h-4 text-indigo-400 animate-pulse" /> Ludo Victory Registrar Setup
+              </h3>
+              
+              <p className="text-xs text-slate-350 leading-relaxed font-sans">
+                The Ludo Victory Registrar is an immutable on-chain smart contract written in Solidity. When a player wins, the match statistics (moves, duration, gas cost, timestamp) are hashed and broadcasted directly to the registrar contract address below.
+              </p>
+
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono text-slate-400 block uppercase tracking-wider">
+                    🎯 Registrar Contract Destination
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={ludoContractAddress}
+                      onChange={(e) => updateLudoContractAddress(e.target.value)}
+                      placeholder="0x... (paste EVM contract address)"
+                      className="w-full bg-black/60 border border-white/10 rounded-xl px-3 py-2 font-mono text-xs text-white focus:outline-none focus:border-indigo-400 focus:bg-black/80"
+                    />
+                    <button
+                      onClick={() => {
+                        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                          navigator.clipboard.writeText(ludoContractAddress);
+                          audio?.playMove();
+                        }
+                      }}
+                      className="bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 p-2.5 rounded-xl transition-all cursor-pointer"
+                      title="Copy Address"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* 1-Click Deployer Panel */}
+                <div className="p-4 bg-indigo-950/40 border border-indigo-500/20 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono text-indigo-300 font-extrabold uppercase tracking-wider">
+                      Solidity 1-Click Deployer
+                    </span>
+                    <span className="text-[9px] font-mono text-slate-400">Gas Cost: ~180,000 gas</span>
+                  </div>
+
+                  <p className="text-[11px] text-slate-300 leading-normal font-sans">
+                    Need a fresh sandbox contract? Deploy an individual, fully compliant copy of the <strong>Ludo Victory Registrar</strong> directly onto the Ritual network.
+                  </p>
+
+                  <button
+                    onClick={() => {
+                      deployContractInGame();
+                      audio?.playYardExit();
+                    }}
+                    disabled={isDeployingContract || web3Wallet.status !== 'connected'}
+                    className={`w-full py-2.5 rounded-xl font-mono font-bold text-[11px] uppercase transition-all flex items-center justify-center gap-2 cursor-pointer border ${
+                      web3Wallet.status !== 'connected'
+                        ? 'bg-slate-800/50 text-slate-500 border-slate-700/30 cursor-not-allowed'
+                        : isDeployingContract
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30 animate-pulse'
+                        : 'bg-gradient-to-r from-indigo-600 to-indigo-700 hover:brightness-110 text-white border-indigo-500/30 shadow-md'
+                    }`}
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isDeployingContract ? 'animate-spin' : ''}`} />
+                    {isDeployingContract ? 'Deploying & Verifying Contract...' : '🚀 Deploy Custom Registrar (1-Click)'}
+                  </button>
+
+                  {deployContractError && (
+                    <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-xs text-rose-300 font-sans leading-relaxed">
+                      ❌ <strong>Deployment failed:</strong> {deployContractError}
+                    </div>
+                  )}
+
+                  {web3Wallet.status !== 'connected' && (
+                    <p className="text-[10px] text-amber-300/80 italic text-center font-mono">
+                      * Please connect MetaMask first to activate contract deployment.
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Web3 Right Side Panel (4 columns) */}
+          <div className="md:col-span-4 space-y-6">
+            {/* Quick Ledger Check Card */}
+            <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-[32px] p-6 space-y-4">
+              <div className="flex items-center justify-between border-b border-white/10 pb-3">
+                <h3 className="text-xs font-display font-black text-slate-200 uppercase tracking-widest flex items-center gap-2">
+                  <Database className="w-4 h-4 text-emerald-400" /> Onchain Ledger
+                </h3>
+                <span className="text-[10px] font-mono text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                  SECURE
+                </span>
+              </div>
+
+              <p className="text-[11px] text-slate-300 leading-normal font-sans">
+                Each official game victory on this workstation is double-written to both client state and local ledger.
+              </p>
+
+              <button
+                onClick={() => {
+                  onOpenVictoryRecords();
+                  audio?.playYardExit();
+                }}
+                className="w-full py-3 bg-gradient-to-r from-emerald-500/15 via-emerald-500/10 to-emerald-500/15 border border-emerald-500/30 hover:border-emerald-400 hover:from-emerald-500/25 hover:to-emerald-500/15 text-emerald-300 rounded-xl font-mono font-bold text-xs uppercase transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-emerald-500/5"
+              >
+                <History className="w-4 h-4 text-emerald-400" /> Open Victory Ledger
+              </button>
+            </div>
+
+            {/* Network Node Information Card */}
+            <div className="bg-slate-900/45 backdrop-blur-md border border-white/8 rounded-[2rem] p-6 space-y-4">
+              <div className="flex items-center gap-2 text-indigo-400 font-display font-black text-xs uppercase tracking-wider">
+                <Compass className="w-4 h-4 text-indigo-400 animate-pulse" /> Ritual testnet parameters
+              </div>
+              
+              <div className="space-y-3 font-mono text-[10px] leading-relaxed">
+                <div className="flex justify-between border-b border-white/5 pb-1.5">
+                  <span className="text-slate-400 uppercase">Network Name</span>
+                  <span className="text-white font-bold">Ritual Testnet</span>
+                </div>
+                <div className="flex justify-between border-b border-white/5 pb-1.5">
+                  <span className="text-slate-400 uppercase">Chain ID</span>
+                  <span className="text-white font-bold">1979</span>
+                </div>
+                <div className="flex justify-between border-b border-white/5 pb-1.5">
+                  <span className="text-slate-450 uppercase">Currency</span>
+                  <span className="text-amber-400 font-bold">RITUAL</span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-slate-450 uppercase block">RPC Endpoint</span>
+                  <span className="text-white font-semibold break-all text-[9px] bg-black/35 p-1.5 rounded border border-white/5">
+                    https://rpc.ritual.net
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <span className="text-slate-450 uppercase block">Block Explorer</span>
+                  <a 
+                    href="https://explorer.ritual.net" 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="text-indigo-300 font-semibold hover:underline flex items-center gap-1 text-[9px] break-all bg-black/35 p-1.5 rounded border border-white/5"
+                  >
+                    https://explorer.ritual.net
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
 
       {/* Rules overlay Modal */}
       {showHowToPlay && (
